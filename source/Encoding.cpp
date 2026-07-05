@@ -5,7 +5,7 @@ Date : 2023-July-06
 
 #include <iostream>
 #include <string.h>
-#include <malloc.h>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include "compression.h"
