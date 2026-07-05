@@ -20,12 +20,23 @@ int main(int argc, char **argv)
     char *decoded;
     int i;
 
+    if (argc < 2)
+    {
+        fprintf(stderr, "Usage: %s <compressed-file>\n", argv[0]);
+        return 1;
+    }
+
     if (argc <= 2)
     {
         printf("***Huffman Decoding***\n");
         if (argc == 2)
         {
             argv[2] = (char *)malloc(sizeof(char) * (strlen(argv[1]) + strlen(decompressed_extension) + 1));
+            if (argv[2] == NULL)
+            {
+                fprintf(stderr, "[!]Memory allocation failed.\n");
+                exit(1);
+            }
             strcpy(argv[2], argv[1]);
             strcat(argv[2], decompressed_extension);
             argc++;
@@ -51,6 +62,12 @@ int main(int argc, char **argv)
 
     // allocate memory for mapping table
     codelist = (codeTable *)malloc(sizeof(codeTable) * n);
+    if (codelist == NULL)
+    {
+        fprintf(stderr, "[!]Memory allocation failed.\n");
+        fclose(fp);
+        exit(1);
+    }
 
     printf("\nReading character to Codeword Mapping Table");
     if (fread(codelist, sizeof(codeTable), n, fp) == 0)
@@ -76,6 +93,7 @@ int main(int argc, char **argv)
         while (decoded[i++] != '\0')
             ; // i-1 characters read into decoded array
         fwrite(decoded, sizeof(char), i - 1, outfile);
+        free(decoded); // free per-iteration allocation to avoid leak
     }
     fclose(fp);
     fclose(outfile);
@@ -89,6 +107,11 @@ char *decodeBuffer(char b)
     static int k;
     static int buffer; // buffer larger enough to hold two b's
     char *decoded = (char *)malloc(MAX * sizeof(char));
+    if (decoded == NULL)
+    {
+        fprintf(stderr, "[!]Memory allocation failed.\n");
+        exit(1);
+    }
     /*
     Logic:
     buffer = [1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0]
@@ -120,7 +143,10 @@ char *decodeBuffer(char b)
 
     while (i < n)
     {
-        if (!match(codelist[i].code, int2string(buffer), k))
+        char *bits = int2string(buffer); // 16-bit view of current buffer
+        int m = match(codelist[i].code, bits, k);
+        free(bits); // free per-iteration allocation to avoid leak
+        if (!m)
         {
             decoded[j++] = codelist[i].x; // match found inserted decoded
             t = strlen(codelist[i].code); // matched bits
@@ -150,7 +176,12 @@ int match(char a[], char b[], int limit)
 char *int2string(int n)
 {
     int i, k, andd, j;
-    char *temp = (char *)malloc(16 * sizeof(char));
+    char *temp = (char *)malloc(17 * sizeof(char)); // 16 bits + '\0'
+    if (temp == NULL)
+    {
+        fprintf(stderr, "[!]Memory allocation failed.\n");
+        exit(1);
+    }
     j = 0;
 
     for (i = 15; i >= 0; i--)
