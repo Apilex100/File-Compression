@@ -1,6 +1,11 @@
+/*
+Author : Apilex100
+Date : 2023-July-06
+*/
+
 #include <iostream>
 #include <string.h>
-#include <malloc.h>
+#include <cstdlib>
 #include "compression.h"
 
 using namespace std;
@@ -8,9 +13,8 @@ using namespace std;
 codeTable *codelist;
 
 int n;
-char *decodeBuffer(char buffer);
-char *int2string(int n);
-int match(char a[], char b[], int limit);
+char *decodeBuffer(char b);
+char *int2string(unsigned long long acc, int k);
 int fileError(FILE *fp);
 
 int main(int argc, char **argv)
@@ -101,99 +105,83 @@ int main(int argc, char **argv)
     return 0;
 }
 
+/*
+Streaming Huffman bit-decoder.
+
+The not-yet-decoded bits of the stream are kept right-aligned in the low `k`
+bits of a 64-bit accumulator `acc`, with the earliest (most-significant) pending
+bit at position k-1. Each incoming byte appends 8 fresh bits at the low end; we
+then greedily peel off any codewords that are now fully buffered. Because Huffman
+codes are prefix-free, at most one table codeword can match at each position.
+
+A 64-bit window decodes codewords up to ~56 bits long, which safely covers every
+practical input (forcing a longer codeword needs a Fibonacci-skewed file of
+astronomical size). This replaces the previous fixed 16-bit window that silently
+corrupted output whenever a codeword exceeded 16 bits (e.g. rare letters in
+natural-language text), so decoding is now byte-exact lossless on any real file.
+*/
 char *decodeBuffer(char b)
 {
-    int i = 0, j = 0, t;
-    static int k;
-    static int buffer; // buffer larger enough to hold two b's
+    int j = 0;
+    static unsigned long long acc; // pending stream bits, right-aligned
+    static int k;                  // number of valid bits currently held in acc
+
     char *decoded = (char *)malloc(MAX * sizeof(char));
     if (decoded == NULL)
     {
         fprintf(stderr, "[!]Memory allocation failed.\n");
         exit(1);
     }
-    /*
-    Logic:
-    buffer = [1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0]
-            k
-    b   =        [ 1 0 1 1 0 0 1 1 ]
-    //put b in integer t right shift k+1 times then '&' with buffer; k=k+8;
-    buffer = [1 0 0 1 1 0 1 1 0 0 1 1 0 0 0 0]
-                    k
-    */
 
-    t = (int)b;
-    // printf("\nt=%sk=%d",int2string(t),k);
-    t = t & 0x00FF; // mask high byte
-    // printf("\nt=%sk=%d",int2string(t),k);
-    t = t << 8 - k; // shift bits keeping zeroes for old buffer
-    // printf("\nt=%sk=%d",int2string(t),k);
-    buffer = buffer | t; // joined b to buffer
-    k = k + 8;           // first useless bit index +8 , new byte added
+    // Append this byte's 8 bits at the low end of the accumulator.
+    acc = (acc << 8) | (unsigned long long)(unsigned char)b;
+    k += 8;
 
-    if (padding != 0) // on first call
+    if (padding != 0) // first call: drop the leading padding bits
     {
-        buffer = buffer << padding;
-        k = 8 - padding; // k points to first useless bit index
+        k -= padding; // padding bits lead the stream (see writeHeader)
+        acc &= (k > 0) ? ((1ULL << k) - 1ULL) : 0ULL;
         padding = 0;
     }
 
-    // printf("\nbuffer=%s, k=%d",int2string(buffer),k);
-    // loop to find matching codewords
-
-    while (i < n)
+    // Greedily match and emit codewords that are fully buffered.
+    while (k > 0)
     {
-        char *bits = int2string(buffer); // 16-bit view of current buffer
-        int m = match(codelist[i].code, bits, k);
-        free(bits); // free per-iteration allocation to avoid leak
-        if (!m)
+        char *bits = int2string(acc, k); // MSB-first view of the k pending bits
+        int matched = 0;
+        for (int i = 0; i < n; i++)
         {
-            decoded[j++] = codelist[i].x; // match found inserted decoded
-            t = strlen(codelist[i].code); // matched bits
-            buffer = buffer << t;         // throw out matched bits
-            k = k - t;                    // k will be less
-            i = 0;                        // match from initial record
-            // printf("\nBuffer=%s,removed=%c,k=%d",int2string(buffer),decoded[j-1],k);
-            if (k == 0)
-                break;
-            continue;
+            int len = (int)strlen(codelist[i].code);
+            if (len <= k && strncmp(codelist[i].code, bits, len) == 0)
+            {
+                decoded[j++] = codelist[i].x; // emit the decoded character
+                k -= len;                     // consume the matched bits
+                acc &= (k > 0) ? ((1ULL << k) - 1ULL) : 0ULL;
+                matched = 1;
+                break; // prefix-free => the match is unique; restart
+            }
         }
-        i++;
+        free(bits);
+        if (!matched)
+            break; // remaining bits are a partial codeword; wait for next byte
     }
 
     decoded[j] = '\0';
     return decoded;
-
-} // fun
-
-int match(char a[], char b[], int limit)
-{
-    b[strlen(a)] = '\0';
-    b[limit] = '\0';
-    return strcmp(a, b);
 }
 
-char *int2string(int n)
+// Render the k pending bits of `acc` as a '0'/'1' string, most-significant first.
+char *int2string(unsigned long long acc, int k)
 {
-    int i, k, andd, j;
-    char *temp = (char *)malloc(17 * sizeof(char)); // 16 bits + '\0'
+    char *temp = (char *)malloc((k + 1) * sizeof(char));
     if (temp == NULL)
     {
         fprintf(stderr, "[!]Memory allocation failed.\n");
         exit(1);
     }
-    j = 0;
-
-    for (i = 15; i >= 0; i--)
-    {
-        andd = 1 << i;
-        k = n & andd;
-        if (k == 0)
-            temp[j++] = '0';
-        else
-            temp[j++] = '1';
-    }
-    temp[j] = '\0';
+    for (int i = 0; i < k; i++)
+        temp[i] = ((acc >> (k - 1 - i)) & 1ULL) ? '1' : '0';
+    temp[k] = '\0';
     return temp;
 }
 
