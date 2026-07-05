@@ -61,11 +61,22 @@ int main(int argc, char** argv)
     HEAD = NULL;
     ROOT = NULL;
 
+    if(argc < 2)
+    {
+        fprintf(stderr, "Usage: %s <input-file>\n", argv[0]);
+        return 1;
+    }
+
     if(argc <= 2)
     {
         printf("\n***Automated File Compression***\n");
         printf("\nCreating new compressed file...............\n");
         argv[2]=(char *)malloc(sizeof(char)*(strlen(argv[1])+strlen(compressed_extension)+1));
+		if(argv[2]==NULL)
+		{
+			fprintf(stderr, "[!]Memory allocation failed.\n");
+			exit(1);
+		}
 		strcpy(argv[2],argv[1]);
 		strcat(argv[2],compressed_extension);
 		argc++;
@@ -93,7 +104,7 @@ int main(int argc, char** argv)
     genCode(ROOT,"\0");
 
     printf("Compressing the file.........................\n");
-    fp=fopen(argv[1],"r");
+    fp=fopen(argv[1],"rb");
     if(fp==NULL)
     {
         printf("\n[!]Input file cannot be opened.\n");
@@ -134,7 +145,7 @@ void writeHeader(FILE *f)
     while(p!=NULL)
     {
         temp+=(strlen(p->code)) * (p->freq);		//temp stores padding
-        if(strlen(p->code) > MAX) printf("\n[!] Codewords are longer than usual.");	//TODO: Solve this case
+        if(strlen(p->code) >= MAX) printf("\n[!] Codewords are longer than usual.");	//codeword + '\0' must fit in code[MAX]
         temp%=8;
         i++;
         p=p->next;
@@ -347,9 +358,17 @@ if(p!=NULL)
 //	printf("[%c|%d|%s|%d]",p->x,p->freq,p->code,p->type);
 	lcode=(char *)malloc(strlen(code)+2);
 	rcode=(char *)malloc(strlen(code)+2);
+	if(lcode==NULL || rcode==NULL)
+	{
+		fprintf(stderr, "[!]Memory allocation failed.\n");
+		exit(1);
+	}
 	sprintf(lcode,"%s0",code);
 	sprintf(rcode,"%s1",code);
 //recursive DFS
+//NOTE: lcode/rcode are handed to child nodes via p->code (see assignment above)
+//and remain referenced until the file is fully written, so they are intentionally
+//not freed here; this is a one-shot leak reclaimed at process exit.
 	genCode(p->left,lcode);		//left child has 0 appended to current node's code
 	genCode(p->right,rcode);
 }
